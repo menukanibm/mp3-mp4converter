@@ -92,36 +92,31 @@ export default function HomePage() {
 
   // Process & Download media
   const handleDownload = async () => {
-    // STRICT AUTH GUARD:
-    // If not logged in, trigger modal and block execution immediately
-    if (!requireAuth("You must be logged in to download media files. Sign in with Google or Email.")) {
-      return;
-    }
-
     if (!url || !selectedFormat) return;
 
     setError(null);
     setDownloading(true);
-    setProgress(15);
-    setStatusMessage("Authenticating user session...");
+    setProgress(20);
+    setStatusMessage("Connecting to downloader service...");
 
     try {
-      // 1. Fetch the user's Firebase ID token
-      const token = await getIdToken();
-      if (!token) {
-        throw new Error("Unable to obtain authentication token. Please sign in again.");
-      }
+      // Fetch optional user token if signed in (auth is currently optional)
+      const token = await getIdToken().catch(() => null);
 
-      setProgress(40);
+      setProgress(45);
       setStatusMessage("Extracting media stream...");
 
-      // 2. Call Protected Download API Route with Bearer Token in Authorization header
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      // Call Download API Route
       const response = await fetch("/api/download", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({
           videoURL: url.trim(),
           url: url.trim(),
@@ -137,7 +132,7 @@ export default function HomePage() {
       setProgress(85);
       setStatusMessage("Preparing final download...");
 
-      // 3. Initiate seamless browser download
+      // Initiate seamless browser download
       const downloadTarget = data.downloadUrl || data.url;
       const downloadName = data.filename || `${data.title || "audio"}.mp3`;
 
@@ -349,18 +344,10 @@ export default function HomePage() {
               ) : (
                 <>
                   <Download className="w-5 h-5" />
-                  <span>
-                    {user ? "Download Selected Format" : "Sign In to Download Media"}
-                  </span>
+                  <span>Download Media</span>
                 </>
               )}
             </button>
-
-            {!user && (
-              <p className="text-center text-xs text-slate-400 dark:text-slate-500 mt-2.5">
-                🔒 Free account required to prevent bot abuse and maintain high download speeds.
-              </p>
-            )}
           </div>
         </div>
       )}
