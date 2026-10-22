@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-// Default API key provided for the public video downloader API
-const DEFAULT_KAVI_API_KEY =
-  process.env.KAVI_API_KEY ||
-  "6e52cd12dfeeb8ec7f65a474141415289b8689ec6f5859533a7a253687d2ba63";
+const YOUTUBE_API_KEY =
+  process.env.YOUTUBE_API_KEY ||
+  "0d0c0b50824820a447cabd089c830e8762fb2612020262ef26f3c635b24c6dd7";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const videoUrl = body.videoURL || body.url;
-    const formatId = body.formatId || "mp4-1080";
+    const formatId = body.formatId || "audio-mp3";
+    const directDownloadUrl = body.downloadUrl;
+    const incomingTitle = body.title;
 
     if (!videoUrl || typeof videoUrl !== "string") {
       return NextResponse.json(
@@ -21,24 +22,33 @@ export async function POST(req: NextRequest) {
     }
 
     const trimmedUrl = videoUrl.trim();
-    const isAudio = formatId === "mp3-audio";
+    const isAudio = formatId.startsWith("audio");
 
-    // Select the appropriate API endpoint based on chosen format:
-    // - MP3 Audio: calls the song extraction endpoint
-    // - MP4 Video: calls the public YouTube video download endpoint with the api_key
-    let targetApiUrl: string;
-    if (isAudio) {
-      targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/youtube/song/?videoURL=${encodeURIComponent(
-        trimmedUrl
-      )}`;
-    } else {
-      targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/public/download/youtube/video/?videoURL=${encodeURIComponent(
-        trimmedUrl
-      )}&api_key=${encodeURIComponent(DEFAULT_KAVI_API_KEY)}`;
+    // 1. Fast Path: If direct stream URL was already resolved during info extraction
+    if (directDownloadUrl && typeof directDownloadUrl === "string") {
+      const cleanTitle = (incomingTitle || "youtube-media")
+        .replace(/[^a-zA-Z0-9_\-\s]/g, "")
+        .trim()
+        .slice(0, 60);
+      const filename = `${cleanTitle || "download"}.${isAudio ? "mp3" : "mp4"}`;
+
+      return NextResponse.json({
+        success: true,
+        url: directDownloadUrl,
+        downloadUrl: directDownloadUrl,
+        filename,
+        title: incomingTitle || "YouTube Media",
+        format: isAudio ? "MP3 Audio" : "MP4 Video",
+      });
     }
 
+    // 2. On-demand Path: Call the YouTube private API with key
+    const targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/private/download/youtube/?url=${encodeURIComponent(
+      trimmedUrl
+    )}&api_key=${encodeURIComponent(YOUTUBE_API_KEY)}`;
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 40000); // 40-second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 40000);
 
     let externalRes: Response;
     try {
@@ -57,38 +67,57 @@ export async function POST(req: NextRequest) {
 
     if (!externalRes.ok) {
       return NextResponse.json(
-        {
-          error: `External downloader service returned HTTP ${externalRes.status}. Please try again later.`,
-        },
+        { error: `Downloader service returned HTTP ${externalRes.status}.` },
         { status: externalRes.status }
       );
     }
 
-    const apiData = await externalRes.json();
+    const apiJson = await externalRes.json();
+    const mediaPayload = apiJson?.data?.data;
 
-    // Validate returned payload: supports both `downloadUrl` (video API) and `url` (song API)
-    const directDownloadUrl = apiData?.data?.downloadUrl || apiData?.data?.url;
-
-    if (!directDownloadUrl) {
+    if (!mediaPayload) {
       return NextResponse.json(
         {
           error:
-            apiData?.message ||
-            "Unable to generate download stream. Please verify the video link is public and accessible.",
+            apiJson?.message ||
+            "Unable to generate download stream. Please verify the video link is public.",
         },
         { status: 502 }
       );
     }
 
-    const rawTitle = apiData?.data?.title || "downloaded-media";
+    let finalStreamUrl = "";
+    if (isAudio) {
+      finalStreamUrl = mediaPayload.audio || "";
+    } else {
+      // Extract corresponding video resolution or highest available
+      const formatKey = formatId.replace("video-", "");
+      if (mediaPayload.videos && mediaPayload.videos[formatKey]) {
+        finalStreamUrl = mediaPayload.videos[formatKey];
+      } else if (mediaPayload.videos) {
+        // Fallback to highest available video quality
+        const sortedKeys = Object.keys(mediaPayload.videos).sort(
+          (a, b) => parseInt(b, 10) - parseInt(a, 10)
+        );
+        finalStreamUrl = mediaPayload.videos[sortedKeys[0]] || "";
+      }
+    }
+
+    if (!finalStreamUrl) {
+      return NextResponse.json(
+        { error: "Requested format stream is currently unavailable for this media." },
+        { status: 404 }
+      );
+    }
+
+    const rawTitle = mediaPayload.title || incomingTitle || "downloaded-media";
     const safeTitle = rawTitle.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().slice(0, 60);
-    const filename =
-      apiData?.data?.filename || `${safeTitle || "media"}.${isAudio ? "mp3" : "mp4"}`;
+    const filename = `${safeTitle || "media"}.${isAudio ? "mp3" : "mp4"}`;
 
     return NextResponse.json({
       success: true,
-      url: directDownloadUrl,
-      downloadUrl: directDownloadUrl,
+      url: finalStreamUrl,
+      downloadUrl: finalStreamUrl,
       filename,
       title: rawTitle,
       format: isAudio ? "MP3 Audio" : "MP4 Video",

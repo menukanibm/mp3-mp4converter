@@ -18,31 +18,35 @@ import {
   ExternalLink,
 } from "lucide-react";
 
+interface MediaFormat {
+  id: string;
+  quality: string;
+  type: "audio" | "video";
+  ext: string;
+  downloadUrl?: string;
+}
+
 interface MediaInfo {
   title: string;
   thumbnail: string;
   duration: number;
   uploader: string;
   platform: string;
-  formats: Array<{
-    id: string;
-    quality: string;
-    type: string;
-    ext: string;
-  }>;
+  formats: MediaFormat[];
 }
 
 export default function HomePage() {
-  const { user, requireAuth, getIdToken } = useAuth();
+  const { user, getIdToken } = useAuth();
 
   const [url, setUrl] = useState("");
   const [loadingInfo, setLoadingInfo] = useState(false);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
-  const [selectedFormat, setSelectedFormat] = useState<string>("mp4-1080");
+  const [selectedFormat, setSelectedFormat] = useState<string>("audio-mp3");
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [lastDownloadedUrl, setLastDownloadedUrl] = useState<string | null>(null);
 
   // Format seconds into MM:SS or HH:MM:SS
   const formatDuration = (seconds: number) => {
@@ -63,8 +67,9 @@ export default function HomePage() {
 
     setError(null);
     setMediaInfo(null);
+    setLastDownloadedUrl(null);
     setLoadingInfo(true);
-    setStatusMessage("Analyzing media link...");
+    setStatusMessage("Analyzing media link & extracting available qualities...");
 
     try {
       const response = await fetch("/api/info", {
@@ -92,19 +97,19 @@ export default function HomePage() {
 
   // Process & Download media
   const handleDownload = async () => {
-    if (!url || !selectedFormat) return;
+    if (!url || !selectedFormat || !mediaInfo) return;
 
     setError(null);
     setDownloading(true);
-    setProgress(20);
-    setStatusMessage("Connecting to downloader service...");
+    setProgress(25);
+    setStatusMessage("Preparing media download stream...");
 
     try {
-      // Fetch optional user token if signed in (auth is currently optional)
+      const currentFormatObj = mediaInfo.formats.find((f) => f.id === selectedFormat);
       const token = await getIdToken().catch(() => null);
 
-      setProgress(45);
-      setStatusMessage("Extracting media stream...");
+      setProgress(60);
+      setStatusMessage("Connecting to high-speed stream server...");
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -121,6 +126,8 @@ export default function HomePage() {
           videoURL: url.trim(),
           url: url.trim(),
           formatId: selectedFormat,
+          downloadUrl: currentFormatObj?.downloadUrl,
+          title: mediaInfo.title,
         }),
       });
 
@@ -129,14 +136,16 @@ export default function HomePage() {
         throw new Error(data.error || "Download failed.");
       }
 
-      setProgress(85);
-      setStatusMessage("Preparing final download...");
+      setProgress(90);
+      setStatusMessage("Starting download...");
 
-      // Initiate seamless browser download
+      // Direct stream download URL
       const downloadTarget = data.downloadUrl || data.url;
-      const downloadName = data.filename || `${data.title || "audio"}.mp3`;
+      const downloadName = data.filename || `${mediaInfo.title || "media"}.${currentFormatObj?.ext || "mp4"}`;
 
       if (downloadTarget) {
+        setLastDownloadedUrl(downloadTarget);
+
         const downloadAnchor = document.createElement("a");
         downloadAnchor.href = downloadTarget;
         downloadAnchor.target = "_blank";
@@ -148,12 +157,12 @@ export default function HomePage() {
       }
 
       setProgress(100);
-      setStatusMessage("Download ready! Your download should start shortly.");
+      setStatusMessage("Download triggered successfully!");
       setTimeout(() => {
         setDownloading(false);
         setProgress(0);
         setStatusMessage("");
-      }, 4000);
+      }, 3500);
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to process download.");
@@ -175,12 +184,12 @@ export default function HomePage() {
         <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.15]">
           Download Videos & MP3s <br />
           <span className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
-            Fast, Free & High Quality
+            Multiple Qualities & Fast Stream
           </span>
         </h1>
 
         <p className="text-base sm:text-lg text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
-          Convert and save full HD videos or crystal clear 320kbps MP3s from your favorite social platforms in one click.
+          Convert and download full HD 1080p, 720p, 480p videos or 320kbps MP3 audio with instant quality selection.
         </p>
       </div>
 
@@ -229,7 +238,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Video Preview & Download Options Card */}
+      {/* Video Preview & Multiple Quality Selection Card */}
       {mediaInfo && (
         <div className="w-full max-w-2xl mt-8 bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl border border-slate-200 dark:border-slate-800 transition-all animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex flex-col sm:flex-row gap-5 items-start">
@@ -263,19 +272,25 @@ export default function HomePage() {
                 {mediaInfo.title}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Uploaded by: <span className="font-semibold text-slate-700 dark:text-slate-300">{mediaInfo.uploader}</span>
+                Found <span className="font-semibold text-indigo-600 dark:text-indigo-400">{mediaInfo.formats.length}</span> stream qualities available
               </p>
             </div>
           </div>
 
           <hr className="my-6 border-slate-100 dark:border-slate-800" />
 
-          {/* Format Selection Grid */}
+          {/* Multiple Quality Selection Grid */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
-              Select Output Format:
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Select Output Format & Quality:
+              </label>
+              <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">
+                {mediaInfo.formats.find((f) => f.id === selectedFormat)?.quality || ""}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[340px] overflow-y-auto pr-1">
               {mediaInfo.formats.map((fmt) => {
                 const isSelected = selectedFormat === fmt.id;
                 const isAudio = fmt.type === "audio";
@@ -290,9 +305,9 @@ export default function HomePage() {
                         : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300"
                     }`}
                   >
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-3 min-w-0">
                       <div
-                        className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                        className={`w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center ${
                           isSelected
                             ? "bg-indigo-600 text-white"
                             : "bg-slate-100 dark:bg-slate-800 text-slate-500"
@@ -300,12 +315,16 @@ export default function HomePage() {
                       >
                         {isAudio ? <Music className="w-4 h-4" /> : <Video className="w-4 h-4" />}
                       </div>
-                      <div>
-                        <div className="text-sm font-semibold">{fmt.quality}</div>
-                        <div className="text-xs text-slate-400 uppercase">{fmt.ext} format</div>
+                      <div className="truncate">
+                        <div className="text-sm font-semibold truncate">{fmt.quality}</div>
+                        <div className="text-xs text-slate-400 uppercase tracking-wider">
+                          {isAudio ? "MP3 Audio" : "MP4 Video"}
+                        </div>
                       </div>
                     </div>
-                    {isSelected && <CheckCircle className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
+                    {isSelected && (
+                      <CheckCircle className="w-5 h-5 flex-shrink-0 text-indigo-600 dark:text-indigo-400 ml-2" />
+                    )}
                   </button>
                 );
               })}
@@ -329,7 +348,7 @@ export default function HomePage() {
           )}
 
           {/* Download Action Button */}
-          <div className="mt-6 pt-2">
+          <div className="mt-6 pt-2 space-y-3">
             <button
               type="button"
               onClick={handleDownload}
@@ -339,15 +358,28 @@ export default function HomePage() {
               {downloading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>Processing Media...</span>
+                  <span>Preparing Stream...</span>
                 </>
               ) : (
                 <>
                   <Download className="w-5 h-5" />
-                  <span>Download Media</span>
+                  <span>Download Selected Quality</span>
                 </>
               )}
             </button>
+
+            {/* Direct Link Fallback Button if download was generated */}
+            {lastDownloadedUrl && (
+              <a
+                href={lastDownloadedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 px-4 rounded-xl border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-300 text-xs font-semibold flex items-center justify-center space-x-2 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Click here if your download didn&apos;t start automatically</span>
+              </a>
+            )}
           </div>
         </div>
       )}
@@ -358,9 +390,9 @@ export default function HomePage() {
           <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
             <Zap className="w-6 h-6" />
           </div>
-          <h3 className="font-bold text-slate-900 dark:text-white">Blazing Fast Extraction</h3>
+          <h3 className="font-bold text-slate-900 dark:text-white">Multi-Resolution Engine</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Powered by modern yt-dlp core to deliver optimal stream speeds directly to your device.
+            Select 1080p, 720p, 480p, 360p or 320kbps MP3 audio tailored to your device.
           </p>
         </div>
 
@@ -368,9 +400,9 @@ export default function HomePage() {
           <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center">
             <ShieldCheck className="w-6 h-6" />
           </div>
-          <h3 className="font-bold text-slate-900 dark:text-white">Secure Firebase Guard</h3>
+          <h3 className="font-bold text-slate-900 dark:text-white">High-Speed CDN Streams</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Protected API routes with verified Firebase token signatures to protect against spam.
+            Direct high-speed streaming links served through dedicated worker proxies.
           </p>
         </div>
 
@@ -380,7 +412,7 @@ export default function HomePage() {
           </div>
           <h3 className="font-bold text-slate-900 dark:text-white">Multi-Platform Ready</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Clean support for YouTube, TikTok clips, and Facebook Watch videos in 1080p, 720p or MP3.
+            Seamless support for YouTube, TikTok clips, and Facebook Watch videos.
           </p>
         </div>
       </div>
