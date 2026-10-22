@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+// Default API key provided for the public video downloader API
+const DEFAULT_KAVI_API_KEY =
+  process.env.KAVI_API_KEY ||
+  "6e52cd12dfeeb8ec7f65a474141415289b8689ec6f5859533a7a253687d2ba63";
+
 export async function POST(req: NextRequest) {
   try {
-    // -------------------------------------------------------------
-    // NOTE: Auth Guard is TEMPORARILY DISABLED as requested.
-    // Anyone can download without a Firebase session token.
-    // -------------------------------------------------------------
-
-    // 1. Parse request payload
     const body = await req.json();
     const videoUrl = body.videoURL || body.url;
+    const formatId = body.formatId || "mp4-1080";
 
     if (!videoUrl || typeof videoUrl !== "string") {
       return NextResponse.json(
@@ -20,13 +20,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Call the external public API to extract audio/song
-    const targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/youtube/song/?videoURL=${encodeURIComponent(
-      videoUrl.trim()
-    )}`;
+    const trimmedUrl = videoUrl.trim();
+    const isAudio = formatId === "mp3-audio";
+
+    // Select the appropriate API endpoint based on chosen format:
+    // - MP3 Audio: calls the song extraction endpoint
+    // - MP4 Video: calls the public YouTube video download endpoint with the api_key
+    let targetApiUrl: string;
+    if (isAudio) {
+      targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/youtube/song/?videoURL=${encodeURIComponent(
+        trimmedUrl
+      )}`;
+    } else {
+      targetApiUrl = `https://kavi-public-apis.vercel.app/api/v2/public/download/youtube/video/?videoURL=${encodeURIComponent(
+        trimmedUrl
+      )}&api_key=${encodeURIComponent(DEFAULT_KAVI_API_KEY)}`;
+    }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 35000); // 35-second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 40000); // 40-second timeout
 
     let externalRes: Response;
     try {
@@ -34,7 +46,8 @@ export async function POST(req: NextRequest) {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         },
         signal: controller.signal,
       });
@@ -45,7 +58,7 @@ export async function POST(req: NextRequest) {
     if (!externalRes.ok) {
       return NextResponse.json(
         {
-          error: `External downloader service returned status ${externalRes.status}. Please try again later.`,
+          error: `External downloader service returned HTTP ${externalRes.status}. Please try again later.`,
         },
         { status: externalRes.status }
       );
@@ -53,34 +66,38 @@ export async function POST(req: NextRequest) {
 
     const apiData = await externalRes.json();
 
-    // 3. Validate external API payload
-    if (!apiData || !apiData.data || !apiData.data.url) {
+    // Validate returned payload: supports both `downloadUrl` (video API) and `url` (song API)
+    const directDownloadUrl = apiData?.data?.downloadUrl || apiData?.data?.url;
+
+    if (!directDownloadUrl) {
       return NextResponse.json(
         {
           error:
             apiData?.message ||
-            "Unable to generate download stream. Please verify the video is public and accessible.",
+            "Unable to generate download stream. Please verify the video link is public and accessible.",
         },
         { status: 502 }
       );
     }
 
-    const { url, filename, title, quality } = apiData.data;
+    const rawTitle = apiData?.data?.title || "downloaded-media";
+    const safeTitle = rawTitle.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().slice(0, 60);
+    const filename =
+      apiData?.data?.filename || `${safeTitle || "media"}.${isAudio ? "mp3" : "mp4"}`;
 
-    // Return the download url and filename back to frontend
     return NextResponse.json({
       success: true,
-      url,
-      downloadUrl: url,
-      filename: filename || `${title || "download"}.mp3`,
-      title: title || "Media Song",
-      quality: quality || null,
+      url: directDownloadUrl,
+      downloadUrl: directDownloadUrl,
+      filename,
+      title: rawTitle,
+      format: isAudio ? "MP3 Audio" : "MP4 Video",
     });
   } catch (err: any) {
     console.error("[API/DOWNLOAD Error]:", err);
     if (err.name === "AbortError") {
       return NextResponse.json(
-        { error: "External media service timed out. Please try again." },
+        { error: "Downloader request timed out. Please try again." },
         { status: 504 }
       );
     }
